@@ -68,6 +68,7 @@ def plot_map(rm, path=None, padding=1, pad_value=0.0, return_type="image", plot_
     回傳:
         fig: matplotlib 的 figure 物件。
     """
+    # plot_bar = config[""]
     dip = 200
 
     if isinstance(rm, torch.Tensor):

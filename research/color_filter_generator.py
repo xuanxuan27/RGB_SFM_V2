@@ -126,7 +126,7 @@ def plot_cielab_grid_with_representatives(lab_points, representative_colors):
             opacity=1.0,
             symbol='diamond'
         ),
-        name="Representative Colors"
+        name="Color Filters"
     ))
 
     # 設置圖形屬性
@@ -136,7 +136,7 @@ def plot_cielab_grid_with_representatives(lab_points, representative_colors):
             yaxis_title="b* (Blue-Yellow)",
             zaxis_title="L* (Lightness)"
         ),
-        title="CIELab Color Space Interactive Grid Visualization with Representative Colors"
+        title="CIELab Color Space Interactive Grid Visualization with Color Filters"
     )
 
     fig.show()
@@ -217,9 +217,9 @@ if __name__ == "__main__":
     all_colors = generate_cielab_grid_points(L_steps=10, a_steps=20, b_steps=20)
 
     # 使用 K-means 聚類生成 30 個代表點
-    representative_colors = generate_representative_colors(all_colors, n_colors=30)
+    representative_colors = generate_representative_colors(all_colors, n_colors=100)
 
-    # # RGB 顏色陣列
+    # # # RGB 顏色陣列
     # rgb_points = [
     #     [185, 31, 87], [208, 47, 72], [221, 68, 59], [233, 91, 35],
     #     [230, 120, 0], [244, 157, 0], [241, 181, 0], [238, 201, 0],
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     #     [112, 63, 150], [129, 55, 138], [143, 46, 124], [173, 46, 108],
     #     [255, 0, 0], [0, 255, 0], [0, 0, 255], [128, 128, 128], [0, 0, 0], [255, 255, 255]
     # ]
-    # # 將 RGB 顏色陣列轉換為 CIELab 座標
+    # # # 將 RGB 顏色陣列轉換為 CIELab 座標
     # representative_colors = convert_rgb_to_lab(rgb_points)
 
     # 繪製交互式網格圖與代表點

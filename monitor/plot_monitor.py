@@ -24,7 +24,7 @@ def plot_channel_histograms(raw, plot_shape=(5, 6), save_dir='.', layer_num='lay
 
     # 創建圖形，預留頂部空間
     plt.figure(figsize=(20, 17))  # 略微增加高度以容納標題
-    plt.suptitle(f"{layer_num} x range : {xlim}, space: {space_count}", fontsize=32, fontweight='bold', y=0.98)
+    # plt.suptitle(f"{layer_num} x range : {xlim}, space: {space_count}", fontsize=32, fontweight='bold', y=0.98)
 
     # 創建分區（5等分）
     bins = np.linspace(xlim[0], xlim[1], space_count + 1)
@@ -45,8 +45,8 @@ def plot_channel_histograms(raw, plot_shape=(5, 6), save_dir='.', layer_num='lay
             patch.set_facecolor(color)
 
         plt.xlim(xlim[0], xlim[1])  # x軸範圍固定在指定區間
-        plt.xticks([])  # 移除x軸刻度標籤
-        plt.yticks([])  # 移除y軸刻度標籤
+        # plt.xticks([])  # 移除x軸刻度標籤
+        # plt.yticks([])  # 移除y軸刻度標籤
 
     # 調整子圖間距
     plt.tight_layout()
