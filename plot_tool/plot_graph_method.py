@@ -3,6 +3,8 @@ from matplotlib import pyplot as plt
 import torch
 from PIL import Image
 
+from config import config
+
 
 def tensor_to_numpy_image(tensor, save_path=None):
     """
@@ -46,7 +48,7 @@ def plot_RM_map(layers,model,layer_num, plot_shape, img, save_path, is_gray = Fa
              path=save_path + f'{layer_num}_RM')
 
 
-def plot_map(rm, path=None, padding=1, pad_value=0.0, return_type="image", plot_bar = False, **kwargs):
+def plot_map(rm, path=None, padding=1, pad_value=0.0, return_type="image", **kwargs):
     """
     繪製濾波器圖像的網格視覺化。
 
@@ -68,7 +70,8 @@ def plot_map(rm, path=None, padding=1, pad_value=0.0, return_type="image", plot_
     回傳:
         fig: matplotlib 的 figure 物件。
     """
-    # plot_bar = config[""]
+    plot_bar = config["plot_bar"]
+    print(f"plot_bar {plot_bar}")
     dip = 200
 
     if isinstance(rm, torch.Tensor):

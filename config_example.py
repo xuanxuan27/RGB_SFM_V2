@@ -4,38 +4,38 @@ from pathlib import Path
 import os
 
 project = "paper experiment"
-name = 'RGB_SFMCNN_V2_MultiColor_Shapes_Database-both-5-1-1'
-group = "06/03"
+name = 'RGB_SFMCNN_V2_CIFAR10-both-1-5-1-1-new_100_color'
+group = "07/17"
 tags = ['RGB_SFMCNN_V2']
 description = """
 
 """
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-load_model_name = 'both-5-1-1'  # "RGB_SFMCNN_V2_best" 'only-rgb-25-channels'
+load_model_name = 'both-1-5-1-1-new_100_color'  # "RGB_SFMCNN_V2_best" 'only-rgb-25-channels'
 
 arch = {
     "name": 'RGB_SFMCNN_V2',
     "need_calculate_status": False,
     "args": {
         "in_channels": 3,
-        "out_channels": 9,
+        "out_channels": 10,
         "mode" : "both", #  'rgb', 'gray', or 'both'
-        "Conv2d_kernel": [[(5, 5), (1, 1), (1, 1)],
-                          [(5, 5), (1, 1), (1, 1)]],
+        "Conv2d_kernel": [[ (1, 1), (5, 5), (1, 1), (1, 1)],
+                          [ (5, 5),  (1, 1), (1, 1)]],
         # SFM_methods: "alpha_mean" "max" "none"
         "SFM_methods": [["alpha_mean", "alpha_mean", "alpha_mean", "alpha_mean"],
                         ["alpha_mean", "alpha_mean", "alpha_mean", "alpha_mean"]],
-        "SFM_filters": [[ (2, 2),  (1, 3),  (1, 1)],
+        "SFM_filters": [[  (1, 1), (2, 2),  (1, 3),  (1, 1)],
                         [ (2, 2),  (1, 3),  (1, 1)]],
         # 對應到畫圖時，該 channel 的形狀
-        "channels": [[(5, 6), (15, 15),  (35, 35)],
+        "channels": [[(10, 10), (15, 15), (25, 25),  (35, 35)],
                      [(7, 10), (15, 15), (35, 35)]],
-        "strides": [[4, 1, 1],
+        "strides": [[1, 4, 1, 1],
                     [4, 1, 1]],
         "paddings": [[0, 0, 0, 0],
                      [0, 0, 0]],
-        # color30 : "new" "old"
-        "color30" : "new",
+        # color_filter : "new_10" "new_30" "new_100"  "old_30"
+        "color_filter" : "new_100",
 
         # conv_method:  "cdist", "dot_product" "squared_cdist" "cosine" "none"
         "conv_method" : [["none", "cosine", "cosine", "cosine"],
@@ -122,11 +122,13 @@ config = {
     "save_dir": save_dir,
     "load_model_name": load_model_name,
     "model": arch,
+    "plot_bar": True,
+    "plot_CAM" : False,
     # "dataset":
     # 'Colored_MNIST', 'Colored_FashionMNIST', 'MultiColor_Shapes_Database'
     # "PathMNIST", "BloodMNIST", "CIFAR10"
     # "RetinaMNIST_224"
-    "dataset": 'MultiColor_Shapes_Database',
+    "dataset": 'CIFAR10',
     "input_shape": (28, 28),
     "batch_size": 256,
     "epoch": 200,

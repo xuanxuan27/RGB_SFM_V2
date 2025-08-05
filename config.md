@@ -47,22 +47,24 @@
 
 ## 🧪 訓練參數
 
-| 參數 | 說明                                                                                     |
-|------|----------------------------------------------------------------------------------------|
-| `save_dir` | 模型儲存資料夾                                                                                |
-| `dataset` | 使用的資料集，例如 `Colored_MNIST`, `MultiColor_Shapes_Database` ，詳細可見`get_dataloader.py`       |
-| `input_shape` | 輸入影像的尺寸                                                                                |
-| `batch_size` | 訓練批次大小                                                                                 |
-| `epoch` | 訓練回合數                                                                                  |
-| `early_stop` | 是否啟用 Early Stopping                                                                    |
-| `patience` | Early Stop 容忍次數                                                                        |
-| `lr` | 初始學習率                                                                                  |
-| `lr_scheduler` | 學習率調整策略（如 `ReduceLROnPlateau`）                                                         |
-| `optimizer` | 使用的優化器（如 `Adam`, `SGD`）                                                                |
-| `loss_fn` | 驗證用損失函數，如 `CrossEntropyLoss`                                                           |
-| `training_loss_fn` | 訓練用損失函數，用於客製化 Loss Function（如 `MetricBaseLoss` 為針對理想濾波器分布的損失函數），詳細可見`loss_function.py` |
-| `use_metric_based_loss` | 訓練時是否使用 `training_loss_fn`，否則用 `loss_fn`                                               |
-| `use_preprocessed_image` | 是否使用預先處理過的影像，主要用於視網膜資料集(RetinaMNIST224)前處理                                                           |
+| 參數                       | 說明                                                                                     |
+|--------------------------|----------------------------------------------------------------------------------------|
+| `save_dir`               | 模型儲存資料夾                                                                                |
+| `plot_bar`               | 畫可解釋性圖用，是否繪製數值的 Bar                                                                    |
+| `plot_CAM`               | plot_example_V2 中，是否使用 Grad_CAM 進行篩選                                                   |
+| `dataset`                | 使用的資料集，例如 `Colored_MNIST`, `MultiColor_Shapes_Database` ，詳細可見`get_dataloader.py`       |
+| `input_shape`            | 輸入影像的尺寸                                                                                |
+| `batch_size`             | 訓練批次大小                                                                                 |
+| `epoch`                  | 訓練回合數                                                                                  |
+| `early_stop`             | 是否啟用 Early Stopping                                                                    |
+| `patience`               | Early Stop 容忍次數                                                                        |
+| `lr`                     | 初始學習率                                                                                  |
+| `lr_scheduler`           | 學習率調整策略（如 `ReduceLROnPlateau`）                                                         |
+| `optimizer`              | 使用的優化器（如 `Adam`, `SGD`）                                                                |
+| `loss_fn`                | 驗證用損失函數，如 `CrossEntropyLoss`                                                           |
+| `training_loss_fn`       | 訓練用損失函數，用於客製化 Loss Function（如 `MetricBaseLoss` 為針對理想濾波器分布的損失函數），詳細可見`loss_function.py` |
+| `use_metric_based_loss`  | 訓練時是否使用 `training_loss_fn`，否則用 `loss_fn`                                               |
+| `use_preprocessed_image` | 是否使用預先處理過的影像，主要用於視網膜資料集(RetinaMNIST224)前處理                                             |
 
 ## 🫀 心臟鈣化設定（`heart_calcification`）
 
