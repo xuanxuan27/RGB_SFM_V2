@@ -17,7 +17,7 @@ import matplotlib
 
 
 # 設定是否繪製 CAM
-PLOT_CAM = True
+PLOT_CAM = False
 
 # 設定是否使用預處理後的影像
 use_preprocessed_image = config['use_preprocessed_image']

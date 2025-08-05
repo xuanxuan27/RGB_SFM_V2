@@ -31,7 +31,7 @@
 | `channels` | 各層濾波器通道數量，最內層 (h, w) 對應繪圖時濾波器排列方式，而外層分別對應 RGB 與 Gray 分支                                                                                                                    |
 | `strides` | 每層卷積的步長設定                                                                                                                                                                  |
 | `paddings` | 卷積 padding 設定                                                                                                                                                              |
-| `color30` | 色彩濾波器組類型：<br> • `new`: CIELAB空間均勻分布<br> • `old`: PCCS 色環                                                                                                                   |
+| `color_filter` | 色彩濾波器組類型：<br> • `new`: CIELAB空間均勻分布<br> • `old`: PCCS 色環                                                                                                                   |
 | `conv_method` | 卷積相似度計算方式：<br> • `cosine`: 餘弦相似度<br> • `cdist`: 歐氏距離<br> • `dot_product`: 內積<br> • `squared_cdist`: 平方距離<br>                                                               |
 | `initial` | 權重初始化方式：<br> • `kaiming`: He 初始化<br> • `uniform`: 均勻初始化<br>                                                                                                                |
 | `rbfs` | RBF 類型與激活函數：<br>  • `triangle`: 三角形函數<br> • `gauss`: 高斯函數<br> • `sigmoid`: sigmoid<br> • `cReLU`: cReLU<br> • `cReLU_percent`: cReLU_percent <br> • `regularization`: 正規化  |

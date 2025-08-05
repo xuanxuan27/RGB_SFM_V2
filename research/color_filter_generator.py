@@ -182,13 +182,12 @@ def convert_rgb_to_lab(rgb_points):
 
 
 # 5. 可視化代表顏色點
-def plot_representative_colors(colors_rgb):
+def plot_representative_colors(colors_rgb, width, height):
     """
     將代表顏色點以顏色方格的方式可視化
     :param colors_rgb: list of lists, 每個顏色點的 RGB 值
     """
-    width = 6
-    height = 5
+
 
     # 創建一個空的顏色矩陣
     color_matrix = np.zeros((height, width,  3), dtype=int)
@@ -217,7 +216,7 @@ if __name__ == "__main__":
     all_colors = generate_cielab_grid_points(L_steps=10, a_steps=20, b_steps=20)
 
     # 使用 K-means 聚類生成 30 個代表點
-    representative_colors = generate_representative_colors(all_colors, n_colors=100)
+    representative_colors = generate_representative_colors(all_colors, n_colors=300)
 
     # # # RGB 顏色陣列
     # rgb_points = [
@@ -241,4 +240,6 @@ if __name__ == "__main__":
     print(representative_colors_rgb)
 
     # 可視化代表顏色點
-    plot_representative_colors(representative_colors_rgb)
+    width = 20
+    height = 15
+    plot_representative_colors(representative_colors_rgb, width, height )
