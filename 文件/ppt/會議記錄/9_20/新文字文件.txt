@@ -1,4 +1,0 @@
-RGB Plan2 放棄 (老師忘了提出RGB Plan 2的理由)
-下周:
-	RGB Plan 1 可解釋性圖片 研究
-	找類似 Qucikdraw 的dataset: 例如: 簡單三角形+紅色
