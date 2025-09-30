@@ -1,0 +1,42 @@
+---
+title: VIT_with_Partial_LRP_GPT Flowchart
+---
+flowchart TD
+  A[Input Image x] --> B[ViT Patch Embedding + Positional Encoding]
+  B --> C[Encoder Layers (repeat L times)]
+  subgraph Encoder Block (with hooks)
+    C1[ln1(x1)] --> C2[Multi-Head Attention]
+    C2 --> C3[Residual Add (x1 + attn_out)]
+    C3 --> C4[ln2(x2)]
+    C4 --> C5[MLP (fc1 → GELU → fc2)]
+    C5 --> C6[Residual Add (x2 + mlp_out)]
+    C2 -.hooks.-> H1[Save A (attn_probs), W_o, W_v, X_in, V, out]
+    C1 -.hook.-> H2[Save ln1_in]
+    C4 -.hook.-> H3[Save ln2_in]
+    C5 -.hooks.-> H4[Save fc1_in, fc1_out, act_out, fc2_out, W_fc1, W_fc2]
+  end
+  C --> D[Tokens_out (CLS + patches)]
+  D --> E[Classifier head (Linear)]
+  E --> F[Logits]
+
+  subgraph Explain (Reverse LRP)
+    F --> G[Pick target logit y_t]
+    G --> H[LRP to CLS vector: lrp_linear(h_cls, W_cls, R_out)]
+    H --> I[Init R_tokens (CLS has relevance, patches 0)]
+    I --> J{For each block (reverse)}
+    J --> K1[Residual-2 split: R → (x2, mlp_out) by |·|]
+    K1 --> K2[MLP back: fc2 ←(LRP)← GELU(~id) ←(LRP)← fc1]
+    K2 --> K3[Residual-1 split: R → (x1, attn_out) by |·|]
+    K3 --> K4[Attention back]
+    subgraph Attention back
+      K41[attn_out ←(LRP with W_o)← concat-heads] --> K42[Split heads]
+      K42 --> K43[R_V = A^T · R_heads]
+      K43 --> K44[Partial: top-k mask + normalize by head_scores]
+      K44 --> K45[tokens ←(LRP with W_v)← R_V_concat]
+    end
+    K4 --> K5[Aggregate: R_tokens = R_x1 + R_ln1_in]
+    K5 --> J
+    J --> L[Output maps: token / patch / image (upsample)]
+  end
+
+

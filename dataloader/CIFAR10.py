@@ -7,6 +7,7 @@ from torch.utils.data import Dataset
 from mlxtend.data import loadlocal_mnist
 from typing import Any, Callable, Optional, Tuple
 from PIL import Image
+import torch
 
 def unpickle(file):
     import pickle
@@ -51,7 +52,8 @@ class CIFAR10(Dataset):
         
         images = images.reshape(images.shape[0], 3, 32, 32)
         images = images.transpose(0,2,3,1)
-        labels = np.eye(10)[labels]
+        # labels = np.eye(10)[labels]
+        labels = np.array(labels, dtype=np.int64)
         return images, labels
     
     def _load_test_data(self):
@@ -60,7 +62,8 @@ class CIFAR10(Dataset):
         labels = dict[b'labels']
         images = images.reshape(images.shape[0], 3, 32, 32)
         images = images.transpose(0,2,3,1)
-        labels = np.eye(10)[labels]
+        # labels = np.eye(10)[labels]
+        labels = np.array(labels, dtype=np.int64)
         return images, labels
         
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
@@ -74,7 +77,9 @@ class CIFAR10(Dataset):
             img = self.transform(img)
 
         if self.target_transform is not None:
-            target = self.target_transform(target)    
+            target = self.target_transform(target)   
+
+        target = torch.tensor(target, dtype=torch.long) 
         return img, target
 
     def __len__(self) -> int:

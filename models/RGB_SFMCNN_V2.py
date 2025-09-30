@@ -445,10 +445,11 @@ class RGB_Conv2d(nn.Module):
         # 轉成 shape: (30, 1, 1, 3)
         weight_tensor = weight_tensor.permute(0, 2, 3, 1)
 
-        # 擴展成 shape: (30, kernel_h, kernel_w, 3)
+        # 擴展成 shape: (30, kernel_h, kernel_w, 3) -> (color_num, kernel_h, kernel_w, channel_num)
         weight_tensor = weight_tensor.repeat(1, kernel_h, kernel_w, 1)
 
         # 註冊為可訓練參數
+        # requires_grad: 是否可訓練。如果否，則為固定色卡，只使用代表色；如果為 True，則可以訓練，色卡會改變。
         self.weight = nn.Parameter(weight_tensor, requires_grad=requires_grad)
 
         self.out_channels = out_channels

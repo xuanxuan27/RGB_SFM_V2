@@ -1,0 +1,38 @@
+@startuml
+title VIT_with_Partial_LRP_GPT Flow
+
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam ArrowColor #444444
+skinparam defaultTextAlignment center
+skinparam activityBackgroundColor #F7F7F7
+skinparam activityBorderColor #B0B0B0
+
+start
+:Input x;
+:ViT Forward (patch+pos, encoder L layers);
+partition "Hooks per block" {
+  :Save ln1_in (before MHA);
+  :MHAWrapper saves A=W_attn, W_o, W_v, X_in, V, out;
+  :Save ln2_in;
+  :Save fc1_in/out, act_out(GELU), fc2_out, W_fc1, W_fc2;
+}
+:Tokens_out + Classifier -> logits;
+
+partition "Explain (LRP reverse)" {
+  :Pick target logit;
+  :LRP to CLS: lrp_linear(h_cls, W_cls, R_out);
+  :Init R_tokens (CLS only);
+  repeat
+    :Residual-2 split R -> (x2, mlp_out) by |·|;
+    :MLP back: fc2 <-LRP- act(~id) <-LRP- fc1;
+    :Residual-1 split R -> (x1, attn_out) by |·|;
+    :Attention back:\n- out <-LRP(W_o)- concat-heads\n- split heads\n- R_V = A^T · R_heads\n- Partial: top-k mask + normalize\n- tokens <-LRP(W_v)- R_V_concat;
+    :Aggregate: R_tokens = R_x1 + R_ln1_in;
+  repeat while (blocks left?) is (yes)
+}
+:Make maps: token / patch(sum C, drop CLS) / image(upsample);
+stop
+@enduml
+
+
