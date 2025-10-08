@@ -26,6 +26,8 @@ def lrp_linear(a: torch.Tensor, W: torch.Tensor, R_out: torch.Tensor,
     def _core(a2, Rout2):
         # z = aW（不含 bias）
         z = a2 @ W
+        if b is not None:
+            z = z + b
         denom = z + eps * torch.sign(z)
         s = Rout2 / (denom + 1e-12)
         c = s @ W.t()
@@ -67,12 +69,16 @@ class MHAWrapper(nn.Module):
         W_o = mha.out_proj.weight.t().detach()                    # [C,C]
         W_qkv = mha.in_proj_weight                                # [3C, C] (q,k,v as out×in)
         C = W_qkv.shape[1]
+        W_q = W_qkv[:C, :].t().detach()                          # [in=C, out=C]
+        W_k = W_qkv[C:2*C, :].t().detach()                        # [in=C, out=C]
         W_v = W_qkv[2*C:3*C, :].t().detach()                      # [in=C, out=C]
         b_v = (mha.in_proj_bias[2*C:3*C].detach()
                if mha.in_proj_bias is not None else None)         # [C] or None
 
         # Register as buffers so they track device with model.to(device)
         self.register_buffer('W_o', W_o)
+        self.register_buffer('W_q', W_q)
+        self.register_buffer('W_k', W_k)
         self.register_buffer('W_v', W_v)
         if b_v is not None:
             self.register_buffer('b_v', b_v)
@@ -99,7 +105,7 @@ class MHAWrapper(nn.Module):
     ):
         # 無論外部要不要 weights，內部一律設 need_weights=True、average_attn_weights=False 以取得 per-head
         out, attn_w = self.mha(
-            query, key, value,
+            query, key, value, # query, key, value 通常在 ViT_B_16 都是 X
             key_padding_mask=key_padding_mask,
             need_weights=True,
             attn_mask=attn_mask,
@@ -116,7 +122,7 @@ class MHAWrapper(nn.Module):
         # v = query @ self.W_v + (self.b_v if self.b_v is not None else 0.0)  # [B,N,C]
         v = value @ self.W_v + (self.b_v if self.b_v is not None else 0.0) # [B,N,C]
         H = self.mha.num_heads
-        d = v.shape[-1] // H
+        d = v.shape[-1] // H # C // H = d
         self.saved_V = v.view(v.shape[0], v.shape[1], H, d).permute(0, 2, 1, 3).detach()
 
         # torchvision ViT 會做 x, _ = self_attention(..., need_weights=False)
@@ -202,27 +208,6 @@ class VIT_with_Partial_LRP(nn.Module):
             wrapper.register_forward_hook(self._attn_forward_hook)
             self.attn_wrappers.append(wrapper)
 
-    # def _attn_forward_hook(self, module: MHAWrapper, inputs, output):
-    #     self._block_counter += 1  # // NEW：每遇到一個 attention 就 +1，視為一個 block
-    #     self.cache.append(dict(
-    #         block_idx=self._block_counter,          # // NEW
-    #         attn_probs=module.saved_attn_probs,     # [B,H,N,N]
-    #         V=module.saved_V,                       # [B,H,N,d]
-    #         W_o=module.W_o,                         # [C,C]
-    #         W_v=module.W_v,                         # [C,C]
-    #         X_in=module.saved_X_in,                 # [B,N,C] (這是 ln1(x1) 後的 token)
-    #         out=module.saved_out,                   # [B,N,C] (attn 輸出)
-    #         # 下列欄位稍後由其他 hook 填充：
-    #         ln1_in=None,    # [B,N,C]  （殘差分支 x1）
-    #         ln2_in=None,    # [B,N,C]  （殘差分支 x2）
-    #         fc1_in=None,    # [B,N,C]  （= ln2(x2)）
-    #         fc1_out=None,   # [B,N,hidden]
-    #         act_out=None,   # [B,N,hidden] GELU 輸出
-    #         fc2_out=None,   # [B,N,C] (mlp 輸出)
-    #         W_fc1=None, b_fc1=None,
-    #         W_fc2=None, b_fc2=None,
-    #     ))
-
     def _attn_forward_hook(self, module: MHAWrapper, inputs, output):
         # 先從等待佇列取對應的 ln1_in（若沒有就放 None）
         ln1_from_queue = self._pending_ln1.pop(0) if len(self._pending_ln1) > 0 else None
@@ -252,6 +237,23 @@ class VIT_with_Partial_LRP(nn.Module):
         # torchvision ViT: encoder.ln 是最後一個 LayerNorm
         if hasattr(self.model, "encoder") and hasattr(self.model.encoder, "ln"):
             self.model.encoder.ln.register_forward_hook(_save_tokens)
+            print("Debug: Hook registered on encoder.ln")
+        else:
+            print("Debug: encoder.ln not found, trying alternative structures...")
+            # 嘗試其他可能的結構
+            if hasattr(self.model, "encoder") and hasattr(self.model.encoder, "norm"):
+                self.model.encoder.norm.register_forward_hook(_save_tokens)
+                print("Debug: Hook registered on encoder.norm")
+            elif hasattr(self.model, "norm"):
+                self.model.norm.register_forward_hook(_save_tokens)
+                print("Debug: Hook registered on model.norm")
+            else:
+                print("Debug: No suitable LayerNorm found for hooking")
+                # 列出所有模組以幫助調試
+                print("Available modules:")
+                for name, module in self.model.named_modules():
+                    if isinstance(module, nn.LayerNorm):
+                        print(f"  - {name}: {type(module)}")
 
     # ---------------------------
     # Public API
@@ -436,7 +438,17 @@ class VIT_with_Partial_LRP(nn.Module):
             # tokens: [CLS, p1, p2, ..., pM]
             grid_h = x.shape[-2] // self._patch_size()
             grid_w = x.shape[-1] // self._patch_size()
-            R_patch = R_tokens[:, 1:, :].sum(dim=2)                     # [B, M]
+            
+            # 使用正相關度聚合，避免正負抵銷導致熱圖失焦
+            R_patch = R_tokens[:, 1:, :].clamp(min=0).sum(dim=2)        # [B, M]
+
+            # # 嘗試 1：保留所有關聯度 (Positive + Negative)
+            # R_patch = R_tokens[:, 1:, :].sum(dim=2)
+            # # 這會顯示所有影響，但可能難以解釋。
+
+            # # 嘗試 2：使用絕對值 (Absolute value)
+            # R_patch = R_tokens[:, 1:, :].abs().sum(dim=2)
+            # # 這顯示了哪些區域影響了決策（無論是支持還是反對）。
             
             if return_map == 'patch':
                 result = R_patch
@@ -482,12 +494,38 @@ class VIT_with_Partial_LRP(nn.Module):
 
     def _fallback_grad_relmap(self, x: torch.Tensor, target_idx: torch.Tensor, return_map: str):
         # simple gradient×input fallback (not true LRP) to avoid crash if hooks fail
+        # 確保模型在訓練模式以允許梯度計算
+        was_training = self.model.training
+        self.model.train()
+        
+        # 確保輸入需要梯度
         x = x.detach().clone().requires_grad_(True)
+        
+        # 確保模型參數需要梯度
+        for param in self.model.parameters():
+            param.requires_grad = True
+        
+        # 前向傳播
         logits = self.model(x)
         sel = logits[torch.arange(x.shape[0]), target_idx]
+        
+        # 確保 sel 需要梯度
+        if not sel.requires_grad:
+            sel = sel.requires_grad_(True)
+            
+        # 清除之前的梯度
         self.model.zero_grad(set_to_none=True)
+        if x.grad is not None:
+            x.grad.zero_()
+            
+        # 反向傳播
         sel.sum().backward()
         rel = (x.grad * x).abs().sum(dim=1)  # [B,H,W]
+        
+        # 恢復原始訓練狀態
+        if not was_training:
+            self.model.eval()
+            
         if return_map == 'image':
             return rel
         # pack as patch-like if requested

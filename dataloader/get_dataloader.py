@@ -53,18 +53,27 @@ dataset_classes = {
 
 
 
-def get_dataloader(dataset, root: str = '.', batch_size=32, input_size: tuple = (28, 28)):
+def get_dataloader(dataset, root: str = '.', batch_size=32, input_size: tuple = (28, 28), use_pretrained_vit=True):
     if dataset in dataset_classes:
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD  = (0.229, 0.224, 0.225)
+        if use_pretrained_vit:
+            norm = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD) 
+        else:
+            norm = transforms.Normalize(mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5])
+
         train_transform = transforms.Compose([
             transforms.Resize([*input_size]),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
+            norm,
         ])
 
         test_transform = transforms.Compose([
             transforms.Resize([*input_size]),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
+            norm,
         ])
 
         print(dataset_classes[dataset])
