@@ -22,6 +22,7 @@ from .AnotherColored_MNIST import AnotherColored_MNIST
 from .AnotherColored_FashionMNIST import AnotherColored_FashionMNIST
 from .CIFAR10 import CIFAR10
 from .Colorful_MNIST import Colorful_MNIST
+from .Caltech101 import Caltech101Dataset
 from torchvision import transforms
 
 dataset_classes = {
@@ -48,7 +49,8 @@ dataset_classes = {
     "RetinaMNIST_224" : CustomerRetinaMNIST_224,
     "BloodMNIST" :  CustomerBloodMNIST,
     'APROS_2019' : APROS_2019Dataset,
-    'PreprocessedRetinaMNIST224' : PreprocessedRetinaMNIST224
+    'PreprocessedRetinaMNIST224' : PreprocessedRetinaMNIST224,
+    'Caltech101': Caltech101Dataset,
 }
 
 
@@ -62,15 +64,20 @@ def get_dataloader(dataset, root: str = '.', batch_size=32, input_size: tuple = 
         else:
             norm = transforms.Normalize(mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5])
 
+        # 使用 bicubic 插值以減少小圖放大時的模糊
         train_transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.convert("RGB")),
             transforms.Resize([*input_size]),
+            # transforms.Resize([*input_size], interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
             norm,
         ])
 
         test_transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.convert("RGB")),
             transforms.Resize([*input_size]),
+            # transforms.Resize([*input_size], interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.ConvertImageDtype(torch.float),
             norm,

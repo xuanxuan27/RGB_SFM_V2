@@ -15,7 +15,7 @@ import math
 from config import config, arch
 
 '''
-來自 2025 陳俊宇的碩士論文:
+來自 2026 葉容瑄的碩士論文:
 '''
 
 def get_feature_extraction_layers(model):
@@ -128,7 +128,7 @@ def extract_branch_layers(conv_blocks, branch_name, CI_only=False):
 '''
     主模型Part
 '''
-class RGB_SFMCNN_V2(nn.Module):
+class RGB_SFMCNN_V3(nn.Module):
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -236,6 +236,52 @@ class RGB_SFMCNN_V2(nn.Module):
                 GRAY_conv2d,
                 *gray_basicBlocks
             )
+
+        # ========== 動態計算實際特徵大小 ==========
+        # 使用 dummy input 計算實際輸出特徵大小
+        try:
+            # 從 config 獲取輸入尺寸，如果沒有則使用預設值 (224, 224)
+            try:
+                input_shape = config.get('input_shape', (224, 224))
+                if isinstance(input_shape, (list, tuple)) and len(input_shape) == 2:
+                    dummy_h, dummy_w = input_shape
+                else:
+                    dummy_h, dummy_w = 224, 224
+            except:
+                dummy_h, dummy_w = 224, 224
+            
+            with torch.no_grad():
+                # 處理 device 參數（可能是字符串或 torch.device）
+                if isinstance(device, str):
+                    dummy_device = torch.device(device)
+                else:
+                    dummy_device = device
+                dummy_input = torch.zeros(1, in_channels, dummy_h, dummy_w, device=dummy_device)
+                features_list = []
+                
+                if self.mode in ['rgb', 'both']:
+                    rgb_out = self.RGB_convs(dummy_input)
+                    rgb_out = rgb_out.reshape(1, -1)
+                    features_list.append(rgb_out)
+                
+                if self.mode in ['gray', 'both']:
+                    gray_in = self.gray_transform(dummy_input)
+                    gray_out = self.Gray_convs(gray_in)
+                    gray_out = gray_out.reshape(1, -1)
+                    features_list.append(gray_out)
+                
+                if features_list:
+                    concat_features = torch.cat(features_list, dim=-1)
+                    actual_fc_input = concat_features.shape[1]
+                else:
+                    actual_fc_input = fc_input
+            
+            # 如果計算出的值與配置值不同，使用實際值並給出警告
+            if actual_fc_input != fc_input:
+                print(f"[警告] fc_input 計算不一致：配置值={fc_input}, 實際值={actual_fc_input}，將使用實際值")
+                fc_input = actual_fc_input
+        except Exception as e:
+            print(f"[警告] 無法動態計算 fc_input，使用配置值 {fc_input}: {e}")
 
         # ========== 全連接層 ==========
         self.fc1 = nn.Sequential(

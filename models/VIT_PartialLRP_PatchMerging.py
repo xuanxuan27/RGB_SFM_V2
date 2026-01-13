@@ -53,6 +53,59 @@ def lrp_linear(a: torch.Tensor, W: torch.Tensor, R_out: torch.Tensor,
 
 
 # ---------------------------
+# Patch Merging Module (類似 PVT 的 OverlapPatchEmbed)
+# ---------------------------
+class PatchMerging(nn.Module):
+    """
+    類似 PVT 的 patch merging，用於在 ViT 層之間進行下採樣。
+    輸入: (B, N, C) token 序列
+    輸出: (B, N', C') token 序列，其中 N' < N（下採樣）
+    """
+    def __init__(self, in_dim: int, out_dim: int, 
+                 kernel_size: int = 7, stride: int = 4, padding: int = 3,
+                 norm_layer: Optional[nn.Module] = None):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        
+        # 使用 Conv2d 進行 patch merging
+        self.proj = nn.Conv2d(in_dim, out_dim, kernel_size, stride, padding)
+        self.norm = norm_layer if norm_layer is not None else nn.LayerNorm(out_dim)
+        
+    def forward(self, x: torch.Tensor, H: int, W: int) -> Tuple[torch.Tensor, int, int]:
+        """
+        Args:
+            x: (B, N, C) token 序列，其中 N = H * W
+            H, W: 空間維度（用於 reshape）
+        Returns:
+            out: (B, N', C') token 序列
+            H', W': 新的空間維度
+        """
+        B, N, C = x.shape
+        
+        # 將 token 序列轉換為 feature map: (B, N, C) -> (B, C, H, W)
+        x = x.transpose(1, 2).reshape(B, C, H, W)
+        
+        # 進行 patch merging (下採樣)
+        x = self.proj(x)  # (B, out_dim, H', W')
+        
+        # 獲取新的空間維度
+        H_new, W_new = x.shape[-2:]
+        N_new = H_new * W_new
+        
+        # 轉回 token 序列: (B, out_dim, H', W') -> (B, N', out_dim)
+        x = x.flatten(2).transpose(1, 2)  # (B, N', out_dim)
+        
+        # LayerNorm
+        x = self.norm(x)
+        
+        return x, H_new, W_new
+
+
+# ---------------------------
 # Wrapper: capture internals from MultiheadAttention
 # ---------------------------
 class MHAWrapper(nn.Module):
@@ -162,7 +215,7 @@ class MHAWrapper(nn.Module):
 # ---------------------------
 # Analyzer: Partial LRP for torchvision ViT
 # ---------------------------
-class VIT_with_Partial_LRP(nn.Module):
+class VIT_PartialLRP_PatchMerging(nn.Module):
     """
     Minimal working Partial LRP for torchvision ViT (vit_b_16, etc.).
     - Performs head-level relevance in attention (Split -> A^T -> partial -> W^V back to X)
@@ -175,12 +228,38 @@ class VIT_with_Partial_LRP(nn.Module):
                  input_size: Tuple[int, int] = (224, 224),
                  topk_heads: Optional[int] = None,
                  head_weighting: str = 'normalize',
-                 eps: float = 1e-6):
+                 eps: float = 1e-6,
+                 # Patch Merging 相關參數
+                 enable_patch_merging: bool = True,  # 預設啟用
+                 patch_merging_layers: Optional[List[int]] = None,  # 預設為 [3, 6, 9]（每 3 層一次）
+                 patch_merging_kernel_size: int = 3,
+                 patch_merging_stride: int = 2,
+                 patch_merging_padding: int = 1):
         super().__init__()
         self.eps = eps
         self.topk_heads = topk_heads
         self.head_weighting = head_weighting
         self.input_size = input_size
+        
+        # Patch Merging 設定
+        self.enable_patch_merging = enable_patch_merging
+        # 預設 merge 位置：對於 12 層的 vit_b_16，建議更保守的 merge 策略
+        # 選項 1: [4, 8] - 只 merge 2 次，保持更多空間信息
+        #   - 早期層（0-4）：保持高解析度 14×14，學習低層特徵
+        #   - 中期層（5-8）：第一次下採樣到 7×7，學習中層特徵
+        #   - 後期層（9-11）：第二次下採樣到 3×3，學習高層特徵（仍有足夠信息）
+        # 選項 2: [6] - 只 merge 1 次，更保守
+        #   - 早期層（0-6）：保持高解析度 14×14
+        #   - 後期層（7-11）：下採樣到 7×7
+        if patch_merging_layers is None:
+            # 預設：只在第 4、8 層之後 merge（更保守，避免過度下採樣）
+            # 這樣可以保持足夠的空間信息用於後續層的處理
+            self.patch_merging_layers = [4, 8]
+        else:
+            self.patch_merging_layers = patch_merging_layers
+        self.patch_merging_kernel_size = patch_merging_kernel_size
+        self.patch_merging_stride = patch_merging_stride
+        self.patch_merging_padding = patch_merging_padding
 
         # 構建或採用外部提供的 ViT backbone（不強制 eval，由訓練流程控制）
         if vit_model is None:
@@ -201,6 +280,11 @@ class VIT_with_Partial_LRP(nn.Module):
         if in_channels != 3:
             self.channel_adapter = nn.Conv2d(in_channels, 3, kernel_size=1, bias=False)
 
+        # 初始化 Patch Merging 模組（如果啟用）
+        self.patch_merging_modules = nn.ModuleDict()
+        if self.enable_patch_merging and len(self.patch_merging_layers) > 0:
+            self._init_patch_merging()
+
         self.cache: List[Dict[str, Any]] = []
         self.layer_activations: List[torch.Tensor] = []  # 儲存每層的 activation
         self._wrap_attentions()
@@ -209,11 +293,156 @@ class VIT_with_Partial_LRP(nn.Module):
         self._hook_layer_activations()  # Hook 每層的 activation
         self._block_counter = 0  # // NEW：追蹤目前是第幾個 block（由 attn hook 推進）
         self._pending_ln1 = []   # ← NEW: ln1 的輸入先暫存這裡（FIFO）
+        
+        # 追蹤當前的空間維度（用於 patch merging）
+        self.current_H = None
+        self.current_W = None
+        
+        # 用於在 patch merging forward 中保存每層的 activation（patch merging 之後）
+        self.layer_activations_with_merging = []
 
+    def _init_patch_merging(self):
+        """初始化 Patch Merging 模組"""
+        # 獲取 encoder 的層數和 embed_dim
+        if hasattr(self.model, 'encoder') and hasattr(self.model.encoder, 'layers'):
+            num_layers = len(self.model.encoder.layers)
+            # 獲取 embed_dim（從第一個 encoder layer 的 attention 取得）
+            if num_layers > 0:
+                first_layer = self.model.encoder.layers[0]
+                if hasattr(first_layer, 'self_attention'):
+                    embed_dim = first_layer.self_attention.in_proj_weight.shape[1]
+                elif hasattr(first_layer, 'ln_1'):
+                    embed_dim = first_layer.ln_1.normalized_shape[0]
+                else:
+                    # 嘗試從 patch embedding 取得
+                    if hasattr(self.model, 'conv_proj'):
+                        embed_dim = self.model.conv_proj.out_channels
+                    else:
+                        embed_dim = 768  # 預設值
+            else:
+                embed_dim = 768
+        else:
+            num_layers = 12  # 預設值
+            embed_dim = 768
+        
+        # 為每個指定的層位置創建 patch merging 模組
+        for layer_idx in self.patch_merging_layers:
+            if 0 <= layer_idx < num_layers:
+                # 計算輸出維度（可以保持相同或增加）
+                out_dim = embed_dim  # 可以改為 embed_dim * 2 來增加通道數
+                module_name = f'merge_after_layer_{layer_idx}'
+                self.patch_merging_modules[module_name] = PatchMerging(
+                    in_dim=embed_dim,
+                    out_dim=out_dim,
+                    kernel_size=self.patch_merging_kernel_size,
+                    stride=self.patch_merging_stride,
+                    padding=self.patch_merging_padding
+                )
+    
+    def _get_patch_grid_size(self, num_patches: int) -> Tuple[int, int]:
+        """從 patch 數量推斷空間維度"""
+        # 假設是正方形
+        grid_size = int(num_patches ** 0.5)
+        return grid_size, grid_size
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.channel_adapter is not None:
             x = self.channel_adapter(x)
-        return self.model(x)
+        
+        # 如果啟用 patch merging，需要自定義 forward
+        if self.enable_patch_merging and len(self.patch_merging_modules) > 0:
+            return self._forward_with_patch_merging(x)
+        else:
+            return self.model(x)
+    
+    def _forward_with_patch_merging(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        帶有 patch merging 的自定義 forward
+        在指定的層之間插入 patch merging 操作
+        """
+        # 獲取 encoder
+        if not hasattr(self.model, 'encoder'):
+            return self.model(x)
+        
+        encoder = self.model.encoder
+        
+        # Patch embedding
+        if hasattr(self.model, 'conv_proj'):
+            x = self.model.conv_proj(x)  # (B, C, H, W)
+            B, C, H, W = x.shape
+            x = x.flatten(2).transpose(1, 2)  # (B, N, C)
+            if hasattr(self.model, 'class_token'):
+                # 添加 class token
+                cls_token = self.model.class_token.expand(B, -1, -1)  # (B, 1, C)
+                x = torch.cat([cls_token, x], dim=1)  # (B, 1+N, C)
+            if hasattr(self.model, 'pos_embed'):
+                x = x + self.model.pos_embed
+        else:
+            # 使用 patch_embed（其他 ViT 變體）
+            x, H, W = self.model.patch_embed(x)
+            if hasattr(self.model, 'pos_embed'):
+                x = x + self.model.pos_embed
+        
+        # 更新當前空間維度
+        if hasattr(self.model, 'conv_proj'):
+            self.current_H = H
+            self.current_W = W
+        else:
+            # 從 patch 數量推斷
+            num_patches = x.shape[1] - 1  # 減去 CLS token
+            self.current_H, self.current_W = self._get_patch_grid_size(num_patches)
+        
+        # 清空 patch merging 專用的 activation 列表
+        self.layer_activations_with_merging = []
+        
+        # 通過 encoder layers
+        for layer_idx, layer in enumerate(encoder.layers):
+            # 通過當前層
+            x = layer(x)
+            
+            # 檢查是否需要在這一層之後進行 patch merging
+            merge_key = f'merge_after_layer_{layer_idx}'
+            if merge_key in self.patch_merging_modules:
+                # 分離 CLS token 和 patch tokens
+                if x.shape[1] > 1:  # 有 CLS token
+                    cls_token = x[:, 0:1, :]  # (B, 1, C)
+                    patch_tokens = x[:, 1:, :]  # (B, N, C)
+                    
+                    # 對 patch tokens 進行 patch merging
+                    merged_patches, H_new, W_new = self.patch_merging_modules[merge_key](
+                        patch_tokens, self.current_H, self.current_W
+                    )
+                    
+                    # 合併回 CLS token
+                    x = torch.cat([cls_token, merged_patches], dim=1)  # (B, 1+N', C')
+                    
+                    # 更新空間維度
+                    self.current_H = H_new
+                    self.current_W = W_new
+                else:
+                    # 沒有 CLS token，直接對所有 tokens 進行 patch merging
+                    x, H_new, W_new = self.patch_merging_modules[merge_key](
+                        x, self.current_H, self.current_W
+                    )
+                    self.current_H = H_new
+                    self.current_W = W_new
+            
+            # 保存這一層的 activation（patch merging 之後的結果）
+            self.layer_activations_with_merging.append(x.detach())
+        
+        # 通過最後的 LayerNorm
+        if hasattr(encoder, 'ln'):
+            x = encoder.ln(x)
+        elif hasattr(encoder, 'norm'):
+            x = encoder.norm(x)
+        
+        # 分類頭
+        if hasattr(self.model, 'heads'):
+            x = self.model.heads(x)
+        elif hasattr(self.model, 'head'):
+            x = self.model.head(x)
+        
+        return x
     
     # ---- Head masking control (affects forward only) ----
     def clear_head_mask(self):
@@ -328,12 +557,11 @@ class VIT_with_Partial_LRP(nn.Module):
     @torch.no_grad()
     def explain(self, x: torch.Tensor, target_class: Optional[int] = None,
                 return_map: str = 'patch', upsample_to_input: bool = False, 
-                return_head_importance: bool = False, restrict_heads: Optional[Dict[int, List[int]]] = None) -> torch.Tensor:
+                return_head_importance: bool = False) -> torch.Tensor:
         """
         x: [B,3,H,W]
         return_map: 'patch' -> [B, grid_h*grid_w], 'token' -> [B,N,C], 'image' -> [B, H, W]
         return_head_importance: bool -> 是否回傳每層 head 重要性分數
-        restrict_heads: {layer_idx: [head_idx1, head_idx2]} 若設定，該層的 LRP 只會流過指定的 heads，其他設為 0。
         """
         # 清理所有累積的張量，避免記憶體洩漏
         self._clear_memory_cache()
@@ -391,14 +619,11 @@ class VIT_with_Partial_LRP(nn.Module):
         R_tokens[:, 0, :] = R_cls
         
         # Debug: 檢查 R_cls 的值
-        print(f"Debug: R_cls shape: {R_cls.shape}, range: [{R_cls.min():.4f}, {R_cls.max():.4f}]")
-        print(f"Debug: R_cls sum: {R_cls.sum():.4f}")
+        # print(f"Debug: R_cls shape: {R_cls.shape}, range: [{R_cls.min():.4f}, {R_cls.max():.4f}]")
+        # print(f"Debug: R_cls sum: {R_cls.sum():.4f}")
 
         # walk encoder blocks in reverse (attention branch only in MVP)
         for i, blk in enumerate(reversed(self.cache)):
-            # 計算「原始層索引」：reversed 第 i 個，對應原本的 layer_(len(cache)-1-i)
-            current_layer = len(self.cache) - 1 - i
-
             # 便利變數
             A    = blk['attn_probs']    # [B,H,N,N]
             W_o  = blk['W_o']           # [C,C]
@@ -427,7 +652,7 @@ class VIT_with_Partial_LRP(nn.Module):
 
             # GELU 先視為身份映射：R_fc1_out = R_act
             # R_fc1_out = R_act # pass through 感覺之後可以在 config 設定 true/false
-            R_fc1_out = self.lrp_gelu_stable(blk['fc1_out'], R_act, eps=self.eps)
+            R_fc1_out = self.lrp_gelu_deeplift(blk['fc1_out'], R_act, eps=self.eps)
 
 
             # 再經 fc1 反推到 ln2(x2)（a=fc1_in, W=W_fc1, R_out=R_fc1_out）
@@ -460,21 +685,6 @@ class VIT_with_Partial_LRP(nn.Module):
             # (2) 用 A^T 路由：bhji · bhjd -> bhid
             R_V = torch.einsum('bhji,bhjd->bhid', A, R_heads)                   # [B,H,N,d]
 
-            # ==========================================
-            # [NEW] 這裡加入 Head Filtering (Backward Masking)
-            # ==========================================
-            if restrict_heads is not None and current_layer in restrict_heads:
-                active_heads = restrict_heads[current_layer]
-                mask = torch.zeros(H, device=R_V.device, dtype=R_V.dtype)
-                # 確保 index 合法
-                valid_heads = [h for h in active_heads if 0 <= h < H]
-                if len(valid_heads) > 0:
-                    mask[valid_heads] = 1.0
-                # 遮蔽 R_V (Relevance Value)，形狀: [B,H,N,d] * [1,H,1,1]
-                R_V = R_V * mask.view(1, H, 1, 1)
-            # ==========================================
-
-            
             # (3) Partial：top-k 與 normalize（建議先 mask 再 normalize）
             # head_scores = R_V.abs().sum(dim=(2, 3))                             # [B,H]
             head_scores = torch.clamp(R_V, min=0).sum(dim=(2,3))                # [B,H]
@@ -485,6 +695,8 @@ class VIT_with_Partial_LRP(nn.Module):
             
             # 儲存 head 重要性分數（在 mask 之前）
             if return_head_importance:
+                # 計算當前層索引：reversed 第 i 個，對應原始層 (len(cache)-1-i)
+                current_layer = len(self.cache) - 1 - i
                 head_importance_scores.append({
                     'layer': current_layer,
                     'head_scores': head_scores.detach().cpu(),  # [B,H]
@@ -534,15 +746,15 @@ class VIT_with_Partial_LRP(nn.Module):
                 grid_h = x.shape[-2] // patch_size
                 grid_w = x.shape[-1] // patch_size
             
-            # 使用正相關度聚合，避免正負抵銷導致熱圖失焦
-            # R_patch = R_tokens[:, 1:, :].clamp(min=0).sum(dim=2)        # [B, M]
+            # # 使用正相關度聚合，避免正負抵銷導致熱圖失焦
+            R_patch = R_tokens[:, 1:, :].clamp(min=0).sum(dim=2)        # [B, M]
 
             # 嘗試 1：保留所有關聯度 (Positive + Negative)
             # R_patch = R_tokens[:, 1:, :].sum(dim=2)
             # 這會顯示所有影響，但可能難以解釋。
 
             # # 嘗試 2：使用絕對值 (Absolute value)
-            R_patch = R_tokens[:, 1:, :].abs().sum(dim=2)
+            # R_patch = R_tokens[:, 1:, :].abs().sum(dim=2)
             # # 這顯示了哪些區域影響了決策（無論是支持還是反對）。
             
             if return_map == 'patch':
@@ -578,34 +790,6 @@ class VIT_with_Partial_LRP(nn.Module):
         alpha = y / (x.abs() + eps)
         alpha = torch.where(x.abs() < 1e-6, torch.full_like(alpha, 0.5), alpha)
         return R_out * alpha
-
-
-    @staticmethod
-    def lrp_gelu_stable(x, R_out, eps=1e-6):
-        """
-        Stable LRP for GELU:
-        dy/dx = Φ(x) + x * φ(x)
-        """
-        if R_out is None:
-            return None
-        
-        # Φ(x): CDF
-        Phi = 0.5 * (1.0 + torch.erf(x / 1.4142135623730951))
-        
-        # φ(x): PDF
-        phi = torch.exp(-0.5 * x**2) / 2.5066282746310002
-
-        # dy/dx
-        dydx = Phi + x * phi
-
-        # avoid zero gradient
-        dydx = torch.clamp(dydx, min=eps)
-
-        # relevance redistribution
-        R_in = R_out * dydx
-
-        # avoid NaN
-        return torch.nan_to_num(R_in, nan=0.0)
 
     # ---- helpers ----
     def _patch_size(self) -> int:
@@ -783,7 +967,7 @@ class VIT_with_Partial_LRP(nn.Module):
             else:
                 R_act = None
 
-            R_fc1_out = self.lrp_gelu_stable(blk['fc1_out'], R_act, eps=self.eps)
+            R_fc1_out = self.lrp_gelu_deeplift(blk['fc1_out'], R_act, eps=self.eps)
 
             if R_fc1_out is not None and blk['W_fc1'] is not None and blk['fc1_in'] is not None:
                 R_ln2_in = lrp_linear(blk['fc1_in'], blk['W_fc1'], R_fc1_out,
@@ -866,14 +1050,32 @@ class VIT_with_Partial_LRP(nn.Module):
         x = x.to(device)
         
         # Forward pass 觸發 hooks
-        _ = self.model(x)
+        # 使用 self(x) 而不是 self.model(x)，這樣才會走 forward 中的 patch merging 邏輯
+        _ = self(x)
         
         # 獲取每層的 activation
         layer_results = {}
         
+        # 如果啟用了 patch merging，使用 patch merging 之後的 activation
+        # 否則使用標準的 layer_activations
+        if self.enable_patch_merging and len(self.patch_merging_modules) > 0:
+            activations_to_use = self.layer_activations_with_merging
+            if len(activations_to_use) == 0:
+                # 如果 patch merging 的 activation 列表為空，回退到標準的
+                print(f"Warning: layer_activations_with_merging is empty, using layer_activations instead")
+                activations_to_use = self.layer_activations
+            else:
+                # 調試：打印每層的 token 數量
+                print(f"Using patch merging activations. Layer token counts:")
+                for i, act in enumerate(activations_to_use):
+                    num_tokens = act.shape[1] - 1  # 減去 CLS token
+                    print(f"  Layer {i}: {num_tokens} patches")
+        else:
+            activations_to_use = self.layer_activations
+        
         # 第一層是 input relevance（需要單獨計算）
         # 這裡我們先處理 encoder layers 的 activation
-        for i, act in enumerate(self.layer_activations):
+        for i, act in enumerate(activations_to_use):
             # act shape: [B, N, C]
             layer_name = f'layer_{i}'
             
@@ -891,8 +1093,26 @@ class VIT_with_Partial_LRP(nn.Module):
                     layer_results[layer_name] = act_patch
                 elif return_map == 'image':
                     # 轉換成 image map
-                    grid_h = x.shape[-2] // self._patch_size()
-                    grid_w = x.shape[-1] // self._patch_size()
+                    # 根據實際的 patch 數量計算空間維度（支援 patch merging）
+                    num_patches = act_patch.shape[1]  # [B, num_patches]
+                    # 假設是正方形（對於 ViT 通常如此）
+                    grid_size = int(num_patches ** 0.5)
+                    # 如果不是完全平方數，使用最接近的整數
+                    if grid_size * grid_size != num_patches:
+                        # 嘗試找到最接近的因數分解
+                        best_diff = float('inf')
+                        best_h, best_w = grid_size, grid_size
+                        for h in range(1, int(num_patches ** 0.5) + 1):
+                            if num_patches % h == 0:
+                                w = num_patches // h
+                                diff = abs(h - w)
+                                if diff < best_diff:
+                                    best_diff = diff
+                                    best_h, best_w = h, w
+                        grid_h, grid_w = best_h, best_w
+                    else:
+                        grid_h, grid_w = grid_size, grid_size
+                    
                     act_grid = act_patch.view(x.shape[0], grid_h, grid_w).unsqueeze(1)  # [B, 1, gh, gw]
                     if upsample_to_input:
                         act_img = F.interpolate(act_grid, size=x.shape[-2:], 
@@ -902,41 +1122,6 @@ class VIT_with_Partial_LRP(nn.Module):
                         layer_results[layer_name] = act_grid.squeeze(1)
         
         return layer_results
-
-    ### 獲取最後一層的 CLS→patch attention map
-    @torch.no_grad()
-    def get_cls_attention_map(self):
-        """
-        Retrieve last-layer CLS→patch attention map from cached attn_probs.
-        Returns:
-            attn_map: [1, H, W] after upsampling to input size
-        """
-        if len(self.cache) == 0:
-            raise ValueError("Run a forward pass first!")
-
-        last = self.cache[-1]
-        A = last['attn_probs']  # [B, H, N, N]
-        B, H, N, _ = A.shape
-
-
-        # CLS → patch tokens only (排除 registers)
-        cls_attn = A[:, :, 0, 1:197]  # [B, H, num_patches]
-
-        # 多頭平均
-        cls_attn = cls_attn.mean(dim=1)        # [B, num_patches]
-
-        # reshape
-        grid_h = grid_w = int(196 ** 0.5) #14x14
-        cls_attn = cls_attn.view(B, 1, grid_h, grid_w)
-
-        # interpolate
-        cls_attn = F.interpolate(cls_attn, size=self.input_size, mode='bicubic', align_corners=False)
-
-        # normalize
-        cls_attn = cls_attn / (cls_attn.max() + 1e-6)
-
-        return cls_attn
-
 
     def analyze_head_importance(self, x: torch.Tensor, target_class: Optional[int] = None, 
                                save_plots: bool = True, save_dir: str = "./head_analysis") -> Dict:
@@ -1047,6 +1232,77 @@ class VIT_with_Partial_LRP(nn.Module):
         
         return analysis
 
+    def build_head_mask_from_importance(self, head_importance, topk: int = 2) -> Dict[int, List[int]]:
+        """
+        根據 analyze_head_importance 的結果，自動挑選最重要 head
+        並生成 {layer: [heads]} 格式
+        
+        Args:
+            head_importance: analyze_head_importance 返回的結果字典
+            topk: 每層要保留的 top-k heads 數量
+        
+        Returns:
+            Dict[int, List[int]]: {layer_idx: [head_idx1, head_idx2, ...]}
+        """
+        layer_to_heads = {}
+        
+        # head_importance 可能是 analyze_head_importance 的完整結果，或只是 head_analysis 列表
+        if isinstance(head_importance, dict):
+            head_analysis = head_importance.get('head_analysis', [])
+        elif isinstance(head_importance, list):
+            head_analysis = head_importance
+        else:
+            raise ValueError("head_importance 必須是 dict 或 list")
+        
+        for layer_info in head_analysis:
+            layer = layer_info['layer']
+            scores = layer_info['mean_scores']  # list of length H
+            
+            # 轉換為 tensor 以便使用 topk
+            if isinstance(scores, list):
+                scores_tensor = torch.tensor(scores)
+            else:
+                scores_tensor = scores
+            
+            k = min(topk, len(scores_tensor))
+            if k > 0:
+                idx = scores_tensor.topk(k).indices.tolist()
+                layer_to_heads[layer] = idx
+            else:
+                layer_to_heads[layer] = []
+        
+        return layer_to_heads
+
+    def select_and_mask_important_heads(self, x: torch.Tensor, topk: int = 2, 
+                                       target_class: Optional[int] = None,
+                                       save_plots: bool = False) -> Dict[int, List[int]]:
+        """
+        一鍵啟動「只用重要 head forward」
+        
+        1) 先跑一張圖片抓 head importance
+        2) 自動挑選 topk heads
+        3) 設定 forward mask，只保留這些 head
+        
+        Args:
+            x: 輸入圖像 [B, 3, H, W]
+            topk: 每層要保留的 top-k heads 數量
+            target_class: 目標類別（None 表示使用預測類別）
+            save_plots: 是否保存 head importance 圖表
+        
+        Returns:
+            Dict[int, List[int]]: {layer_idx: [head_idx1, head_idx2, ...]} 使用的 head mapping
+        """
+        # Step 1: 分析 head importance
+        analysis = self.analyze_head_importance(x, target_class=target_class, save_plots=save_plots)
+        
+        # Step 2: 從分析結果建立 head mask
+        mapping = self.build_head_mask_from_importance(analysis, topk=topk)
+        
+        # Step 3: 設定 forward mask
+        self.set_head_mask(mapping, keep_only=True)
+        
+        return mapping
+
     
     # --- new --- #
 
@@ -1116,6 +1372,7 @@ class VIT_with_Partial_LRP(nn.Module):
         
         # 清理 layer activations
         self.layer_activations.clear()
+        self.layer_activations_with_merging.clear()
         
         # 清理 pending ln1 列表
         self._pending_ln1.clear()
@@ -1180,7 +1437,7 @@ if __name__ == "__main__":
     weights = None  # or ViT_B_16_Weights.IMAGENET1K_V1
     model = tv_models.vit_b_16(weights=weights).to(device).eval()
 
-    analyzer = VIT_with_Partial_LRP(model, topk_heads=2, head_weighting='normalize', eps=1e-6)
+    analyzer = VIT_PartialLRP_PatchMerging(model, topk_heads=2, head_weighting='normalize', eps=1e-6)
 
     x = torch.randn(1, 3, 224, 224, device=device)
     R_patch = analyzer.compute_lrp_relevance(x, return_map='patch')     # [1, 196]

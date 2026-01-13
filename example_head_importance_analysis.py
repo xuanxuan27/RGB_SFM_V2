@@ -86,7 +86,7 @@ def main():
     import os
     
 
-    path = f"runs/train/exp62/VIT_best.pth"
+    path = f"runs/train/exp106/VIT_best.pth"
     ckpt = torch.load(path, map_location=device)
     
 
@@ -147,7 +147,7 @@ def main():
 
     # 從 dataloader 蒐集最多 N 筆樣本（可跨多個 batch）
     print("蒐集最多 20 筆樣本以一次繪製...")
-    N = 20
+    N = 4
     def collect_n_samples(loader, device, n):
         xs, ys = [], []
         collected = 0
@@ -350,6 +350,18 @@ def main():
     if X_vis.shape[1] == 3:
         X_vis = X_vis.permute(0, 2, 3, 1).contiguous()  # [B,H,W,3]
     img_rel = image_relevance.detach().cpu()
+    
+    # ImageNet 反標準化用常數（因為 dataloader 使用了 ImageNet 正規化）
+    IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3)
+    IMAGENET_STD  = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3)
+    
+    def denorm_img(img_hw3: np.ndarray) -> np.ndarray:
+        """將正規化後的圖像還原至 [0,1] 範圍"""
+        if img_hw3.ndim == 3 and img_hw3.shape[-1] == 3:
+            img = img_hw3 * IMAGENET_STD + IMAGENET_MEAN
+            return np.clip(img, 0.0, 1.0)
+        # 灰階或其他情況直接裁剪
+        return np.clip(img_hw3, 0.0, 1.0)
 
     # 取得 patch 大小 (若無法推斷，格線將略過)
     inferred_ps = _infer_patch_size(analyzer.model)
@@ -365,6 +377,8 @@ def main():
     
     for i in range(batch_size):
         img = X_vis[i].numpy()
+        # 反正規化圖像（從 ImageNet 正規化還原到 [0,1]）
+        img_denorm = denorm_img(img)
         heat = img_rel[i].numpy()
         
         # 正規化熱圖到 [0,1]
@@ -379,11 +393,12 @@ def main():
         
         # 創建標題文字
         status = "✓" if is_correct else "✗"
-        title = f"Sample {i} {status}\nGT: {gt_class}, Pred: {pred_class}, Conf: {conf:.3f}"
+        # title = f"Sample {i} {status}\nGT: {gt_class}, Pred: {pred_class}, Conf: {conf:.3f}"
+        title = f"Sample {i} {status}"
 
-        # 單獨原圖
+        # 單獨原圖（使用反正規化後的圖像）
         plt.figure(figsize=(6, 5))
-        plt.imshow(img)
+        plt.imshow(img_denorm)
         plt.title(title, fontsize=12, pad=20)
         plt.axis('off')
         plt.tight_layout()
@@ -400,12 +415,12 @@ def main():
         plt.savefig(f'./head_analysis_results/sample_{i}_heatmap.png', dpi=150, bbox_inches='tight')
         plt.close()
 
-        # 疊加原圖
+        # 疊加原圖（使用反正規化後的圖像）
         plt.figure(figsize=(6, 5))
-        if img.ndim == 3 and img.shape[-1] == 3:
-            plt.imshow(np.clip(img, 0, 1))
+        if img_denorm.ndim == 3 and img_denorm.shape[-1] == 3:
+            plt.imshow(img_denorm)
         else:
-            plt.imshow(img.squeeze(), cmap='gray')
+            plt.imshow(img_denorm.squeeze(), cmap='gray')
         plt.imshow(heat_norm, cmap='jet', alpha=0.6)
         plt.title(title, fontsize=12, pad=20)
         plt.axis('off')
@@ -413,15 +428,15 @@ def main():
         plt.savefig(f'./head_analysis_results/sample_{i}_overlay.png', dpi=150, bbox_inches='tight')
         plt.close()
 
-        # 原圖 + 格線
+        # 原圖 + 格線（使用反正規化後的圖像）
         if patch_h is not None and patch_w is not None:
             h_px, w_px = heat.shape
             plt.figure(figsize=(6, 5))
             ax = plt.gca()
-            if img.ndim == 3 and img.shape[-1] == 3:
-                ax.imshow(np.clip(img, 0, 1))
+            if img_denorm.ndim == 3 and img_denorm.shape[-1] == 3:
+                ax.imshow(img_denorm)
             else:
-                ax.imshow(img.squeeze(), cmap='gray')
+                ax.imshow(img_denorm.squeeze(), cmap='gray')
             _draw_patch_grid(ax, h_px, w_px, patch_h, patch_w, color='white', lw=0.6, alpha=0.8)
             ax.set_title(title, fontsize=12, pad=20)
             ax.set_axis_off()
@@ -442,15 +457,15 @@ def main():
             plt.savefig(f'./head_analysis_results/sample_{i}_heatmap_grid.png', dpi=150, bbox_inches='tight')
             plt.close()
 
-        # 疊加原圖 + 熱圖 + 格線
+        # 疊加原圖 + 熱圖 + 格線（使用反正規化後的圖像）
         if patch_h is not None and patch_w is not None:
             h_px, w_px = heat.shape
             plt.figure(figsize=(6, 5))
             ax = plt.gca()
-            if img.ndim == 3 and img.shape[-1] == 3:
-                ax.imshow(np.clip(img, 0, 1))
+            if img_denorm.ndim == 3 and img_denorm.shape[-1] == 3:
+                ax.imshow(img_denorm)
             else:
-                ax.imshow(img.squeeze(), cmap='gray')
+                ax.imshow(img_denorm.squeeze(), cmap='gray')
             ax.imshow(heat_norm, cmap='jet', alpha=0.6)
             _draw_patch_grid(ax, h_px, w_px, patch_h, patch_w, color='white', lw=0.6, alpha=0.9)
             ax.set_title(title, fontsize=12, pad=20)
@@ -467,8 +482,142 @@ def main():
         print(f"  - Correct: {'Yes' if is_correct else 'No'}")
         print(f"  - Heat range: [{hmin:.2f}, {hmax:.2f}]")
 
+    # 方法 6: 逐層 heatmap 分析
+    print("\n=== 方法 6: 逐層 Heatmap 分析 ===")
+    layer_results = analyzer.explain_per_layer(
+        X, 
+        target_class=None,
+        return_map='image', 
+        upsample_to_input=True
+    )
+    
+    print(f"計算了 {len(layer_results)} 層的 relevance maps")
+    for layer_name, layer_map in layer_results.items():
+        print(f"  - {layer_name}: {layer_map.shape}")
+    
+    # 為每個樣本創建逐層 heatmap
+    os.makedirs("./head_analysis_results/per_layer", exist_ok=True)
+    
+    for sample_idx in range(min(5, batch_size)):  # 只處理前5個樣本以節省時間
+        print(f"\n處理樣本 {sample_idx} 的逐層 heatmap...")
+        
+        # 獲取當前樣本的資訊
+        pred_class = pred_cpu[sample_idx].item()
+        gt_class = gt_cpu[sample_idx].item()
+        conf = conf_cpu[sample_idx].item()
+        is_correct = pred_class == gt_class
+        status = "✓" if is_correct else "✗"
+        
+        # 創建大圖包含所有層
+        num_layers = len(layer_results)
+        cols = min(4, num_layers)  # 每行最多4個
+        rows = (num_layers + cols - 1) // cols
+        
+        fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 4*rows))
+        if rows == 1 and cols == 1:
+            axes = [axes]
+        elif rows == 1:
+            axes = axes
+        else:
+            axes = axes.flatten()
+        
+        # 為每一層繪製 heatmap
+        for i, (layer_name, layer_map) in enumerate(layer_results.items()):
+            if i >= len(axes):
+                break
+                
+            ax = axes[i]
+            heat = layer_map[sample_idx].detach().cpu().numpy()
+            
+            # 正規化熱圖
+            hmin, hmax = heat.min(), heat.max()
+            if hmax > hmin:
+                heat_norm = (heat - hmin) / (hmax - hmin)
+            else:
+                heat_norm = heat
+            
+            im = ax.imshow(heat_norm, cmap='jet')
+            ax.set_title(f'{layer_name}\nRange: [{hmin:.3f}, {hmax:.3f}]', fontsize=10)
+            ax.axis('off')
+            
+            # 添加 colorbar
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        # 隱藏多餘的 subplot
+        for i in range(len(layer_results), len(axes)):
+            axes[i].axis('off')
+        
+        # 添加總標題
+        # title = f"Sample {sample_idx} {status} - Per Layer Heatmaps\nGT: {gt_class}, Pred: {pred_class}, Conf: {conf:.3f}"
+        title = f"Sample {sample_idx} {status} - Per Layer Heatmaps"
+
+        fig.suptitle(title, fontsize=14, y=0.95)
+        
+        plt.tight_layout()
+        plt.savefig(f'./head_analysis_results/per_layer/sample_{sample_idx}_all_layers.png', 
+                   dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 為每一層創建單獨的詳細圖
+        for layer_name, layer_map in layer_results.items():
+            heat = layer_map[sample_idx].detach().cpu().numpy()
+            
+            # 正規化熱圖
+            hmin, hmax = heat.min(), heat.max()
+            if hmax > hmin:
+                heat_norm = (heat - hmin) / (hmax - hmin)
+            else:
+                heat_norm = heat
+            
+            # 創建包含原圖、熱圖和疊加圖的組合
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            
+            # 原圖（使用反正規化後的圖像）
+            img = X_vis[sample_idx].numpy()
+            img_denorm = denorm_img(img)
+            if img_denorm.ndim == 3 and img_denorm.shape[-1] == 3:
+                axes[0].imshow(img_denorm)
+            else:
+                axes[0].imshow(img_denorm.squeeze(), cmap='gray')
+            axes[0].set_title('Original Image')
+            axes[0].axis('off')
+            
+            # 熱圖
+            im = axes[1].imshow(heat_norm, cmap='jet')
+            axes[1].set_title(f'{layer_name} Heatmap\nRange: [{hmin:.3f}, {hmax:.3f}]')
+            axes[1].axis('off')
+            plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
+            
+            # 疊加圖（使用反正規化後的圖像）
+            if img_denorm.ndim == 3 and img_denorm.shape[-1] == 3:
+                axes[2].imshow(img_denorm)
+            else:
+                axes[2].imshow(img_denorm.squeeze(), cmap='gray')
+            axes[2].imshow(heat_norm, cmap='jet', alpha=0.6)
+            axes[2].set_title(f'{layer_name} Overlay')
+            axes[2].axis('off')
+            
+            # 添加格線（如果有 patch 資訊）
+            if patch_h is not None and patch_w is not None:
+                h_px, w_px = heat.shape
+                for ax in axes:
+                    _draw_patch_grid(ax, h_px, w_px, patch_h, patch_w, 
+                                   color='white' if ax == axes[2] else 'black', 
+                                   lw=0.6, alpha=0.8)
+            
+            plt.suptitle(f"Sample {sample_idx} {status} - {layer_name}\nGT: {gt_class}, Pred: {pred_class}, Conf: {conf:.3f}", 
+                        fontsize=12)
+            plt.tight_layout()
+            plt.savefig(f'./head_analysis_results/per_layer/sample_{sample_idx}_{layer_name}.png', 
+                       dpi=150, bbox_inches='tight')
+            plt.close()
+        
+        print(f"  樣本 {sample_idx} 的逐層 heatmap 已儲存")
+
     print("\n=== 分析完成 ===")
-    print("你可以查看 ./head_analysis_results/ 資料夾中的視覺化結果")
+    print("你可以查看以下資料夾中的視覺化結果:")
+    print("  - ./head_analysis_results/ (基本分析結果)")
+    print("  - ./head_analysis_results/per_layer/ (逐層 heatmap)")
 
 if __name__ == "__main__":
     main()
